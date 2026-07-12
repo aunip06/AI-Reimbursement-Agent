@@ -1,39 +1,43 @@
 import pandas as pd
 
 
-def read_expenses(file_path, month):
-    # Read the Excel without assuming headers
-    df = pd.read_excel(
-        file_path,
-        sheet_name="Expenses",
-        header=None
-    )
+def read_expense_sheet(file_path):
 
-    start_row = None
-
-    # Find the selected month
-    for index, row in df.iterrows():
-        if str(row[0]).strip() == month:
-            start_row = index + 2   # Skip month row and header row
-            break
-
-    if start_row is None:
-        raise ValueError(f"Month '{month}' not found.")
+    df = pd.read_excel(file_path, header=None)
 
     expenses = []
 
-    # Read rows until blank row
-    for i in range(start_row, len(df)):
+    current_month = None
 
-        if pd.isna(df.iloc[i, 0]):
-            break
+    for row in df.values:
 
-        expenses.append({
-            "No": df.iloc[i, 0],
-            "Date": df.iloc[i, 1],
-            "Description": df.iloc[i, 2],
-            "Amount": df.iloc[i, 3],
-            "Remarks": df.iloc[i, 4],
-        })
+        row = list(row)
 
-    return pd.DataFrame(expenses)
+        # Detect month heading
+        if isinstance(row[0], str) and "2026" in row[0]:
+            current_month = row[0]
+            continue
+
+        # Skip header rows
+        if row[0] == "No":
+            continue
+
+        # Skip totals
+        if row[2] == "Total":
+            continue
+
+        # Skip empty rows
+        if pd.isna(row[0]):
+            continue
+
+        expense = {
+            "month": current_month,
+            "date": row[1],
+            "description": row[2],
+            "amount": row[3],
+            "remarks": row[4]
+        }
+
+        expenses.append(expense)
+
+    return expenses
