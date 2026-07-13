@@ -6,10 +6,16 @@ load_dotenv()
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL = "gpt-4.1-mini"
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
-# Limit pages during development.
-# Use None later to process the complete PDF.
+if not OPENAI_API_KEY:
+    raise ValueError(
+        "OPENAI_API_KEY is missing. Add it to your local .env file."
+    )
+
+# Development safety
+# 1    = process only the first page
+# None = process the complete PDF
 MAX_PAGES = 1
 
 # Project folders
