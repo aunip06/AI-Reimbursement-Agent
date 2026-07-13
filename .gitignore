@@ -1,21 +1,33 @@
-# Python
+# Python cache
 __pycache__/
-*.pyc
+*.py[cod]
 
-# Virtual Environment
+# Virtual environments
 .venv/
+venv/
 
-# Environment Variables
-.env
+# Environment variables and secrets
+.env*
+!.env.example
 
-# macOS
-.DS_Store
-
-# Temporary Files
+# Temporary files
 temp/
+*.tmp
+
+# Generated output
+output/*
+!output/.gitkeep
+
+# Local/private input data
+input/*
+!input/.gitkeep
+
+# Logs
+*.log
 
 # VS Code
 .vscode/
 
-# Logs
-*.log
+# Operating system files
+.DS_Store
+Thumbs.db
