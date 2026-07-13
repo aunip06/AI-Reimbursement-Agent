@@ -6,7 +6,11 @@ load_dotenv()
 
 # OpenAI
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-MODEL = "gpt-4.1-mini"      # Change to "gpt-5.5" if you want
+MODEL = "gpt-4.1-mini"
+
+# Limit pages during development.
+# Use None later to process the complete PDF.
+MAX_PAGES = 1
 
 # Project folders
 INPUT_FOLDER = "input"
