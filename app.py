@@ -1,40 +1,25 @@
 from tools.pdf_tool import pdf_to_images
 from tools.ocr_tool import extract_text
-from agents.agents.parser_agent import parse_receipt
-from tools.excel_tool import read_expense_sheet
-from tools.matcher import match_receipt
+from agents.receipt_extraction_agent import extract_receipt_data
 
 pdf_file = "input/exp_may.pdf"
 
 print("Converting PDF to image...")
-
 images = pdf_to_images(pdf_file)
 
-print(f"Found {len(images)} page(s).\n")
+print(f"Found {len(images)} page(s).")
 
 for image in images:
 
-    print(f"Reading: {image}")
+    print(f"\nReading: {image}")
 
-    text = extract_text(image)
+    ocr_text = extract_text(image)
 
     print("\n========== OCR TEXT ==========\n")
-    print(text)
+    print(ocr_text)
 
-    print("\n========== AI PARSED DATA ==========\n")
+    print("\n========== AI EXTRACTION ==========\n")
 
-    data = parse_receipt(text)
+    receipt = extract_receipt_data(ocr_text)
 
-    print(data)
-    print(type(data))
-print(data)
-print("\n========== EXCEL DATA ==========\n")
-
-rows = read_expense_sheet("input/expense_format_similar.xlsx")
-
-for row in rows:
-    print(row)
-    best_match = match_receipt(data, rows)
-
-print("\n========== BEST MATCH ==========\n")
-print(best_match)
+    print(receipt.model_dump())
