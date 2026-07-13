@@ -1,6 +1,6 @@
 from tools.pdf_tool import pdf_to_images
 from tools.ocr_tool import extract_text
-from agents.receipt_extraction_agent import extract_receipt_data
+from ai_agents.receipt_extraction_agent import extract_receipt_data
 
 pdf_file = "input/exp_may.pdf"
 
