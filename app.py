@@ -1,7 +1,7 @@
 from tools.pdf_tool import pdf_to_images
 from tools.ocr_tool import extract_text
 from ai_agents.receipt_extraction_agent import extract_receipt_data
-from config import MAX_PAGES
+from config import MAX_PAGES, DRY_RUN
 
 pdf_file = "input/exp_may.pdf"
 
@@ -20,6 +20,10 @@ for image in images:
 
     print("\n========== OCR TEXT ==========\n")
     print(ocr_text)
+
+    if DRY_RUN:
+        print("\nDRY RUN: OpenAI extraction skipped.")
+        continue
 
     print("\n========== AI EXTRACTION ==========\n")
 

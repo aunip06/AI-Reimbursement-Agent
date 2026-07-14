@@ -17,6 +17,9 @@ if not OPENAI_API_KEY:
 # 1    = process only the first page
 # None = process the complete PDF
 MAX_PAGES = 1
+# True  = run PDF conversion and OCR only
+# False = also call OpenAI for receipt extraction
+DRY_RUN = True
 
 # Project folders
 INPUT_FOLDER = "input"
