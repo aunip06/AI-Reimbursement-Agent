@@ -18,13 +18,15 @@ def extract_receipt_data(ocr_text: str) -> Receipt:
     Extract structured receipt information from OCR text
     using the OpenAI Agents SDK.
 
-    The function allows only one model invocation.
+    Only one agent turn is permitted.
     """
 
     cleaned_text = ocr_text.strip()
 
     if not cleaned_text:
-        raise ValueError("OCR text is empty. Receipt extraction cannot run.")
+        raise ValueError(
+            "OCR text is empty. Receipt extraction cannot run."
+        )
 
     result = Runner.run_sync(
         starting_agent=receipt_extraction_agent,
@@ -44,5 +46,13 @@ def extract_receipt_data(ocr_text: str) -> Receipt:
         raise TypeError(
             "Receipt Extraction Agent returned an unexpected output type."
         )
+
+    usage = result.context_wrapper.usage
+
+    print("\n========== OPENAI USAGE ==========\n")
+    print(f"Requests: {usage.requests}")
+    print(f"Input tokens: {usage.input_tokens}")
+    print(f"Output tokens: {usage.output_tokens}")
+    print(f"Total tokens: {usage.total_tokens}")
 
     return receipt
