@@ -25,3 +25,4 @@ DRY_RUN = True
 INPUT_FOLDER = "input"
 OUTPUT_FOLDER = "output"
 TEMP_FOLDER = "temp"
+CACHE_FOLDER = "cache"
