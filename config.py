@@ -13,13 +13,18 @@ if not OPENAI_API_KEY:
         "OPENAI_API_KEY is missing. Add it to your local .env file."
     )
 
-# Development safety
-# 1    = process only the first page
-# None = process the complete PDF
-MAX_PAGES = 1
-# True  = run PDF conversion and OCR only
-# False = also call OpenAI for receipt extraction
-DRY_RUN = True
+# Development controls
+max_pages_value = os.getenv("MAX_PAGES", "1").strip().lower()
+
+if max_pages_value in {"none", "all"}:
+    MAX_PAGES = None
+else:
+    MAX_PAGES = int(max_pages_value)
+
+DRY_RUN = os.getenv(
+    "DRY_RUN",
+    "true",
+).strip().lower() in {"true", "1", "yes", "on"}
 
 # Project folders
 INPUT_FOLDER = "input"
