@@ -27,13 +27,7 @@ for image in images:
     print("\n========== OCR TEXT ==========\n")
     print(ocr_text)
 
-    # Development mode:
-    # Skip both cache lookup and OpenAI extraction.
-    if DRY_RUN:
-        print("\nDRY RUN: OpenAI extraction skipped.")
-        continue
-
-    # Check whether this OCR text was already processed.
+    # Always check the local cache first.
     cached_result = load_cached_result(ocr_text)
 
     if cached_result is not None:
@@ -41,15 +35,21 @@ for image in images:
         print(cached_result)
         continue
 
-    # No cache was found, so call OpenAI once.
+    # When no cache exists, dry-run mode prevents an OpenAI call.
+    if DRY_RUN:
+        print(
+            "\nDRY RUN: No cached result found. "
+            "OpenAI extraction skipped."
+        )
+        continue
+
+    # No cache exists and dry-run mode is disabled.
     print("\n========== AI EXTRACTION ==========\n")
 
     receipt = extract_receipt_data(ocr_text)
 
-    # Convert the Pydantic model into JSON-compatible data.
     receipt_data = receipt.model_dump(mode="json")
 
-    # Save the result so the same receipt is not sent again.
     cache_path = save_cached_result(
         ocr_text=ocr_text,
         result=receipt_data,
