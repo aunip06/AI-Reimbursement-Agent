@@ -7,7 +7,7 @@ from config import CACHE_FOLDER, MODEL
 
 
 # Change this value whenever the extraction prompt or schema changes.
-CACHE_VERSION = "receipt-extraction-v1"
+CACHE_VERSION = "receipt-extraction-v2"
 
 
 def build_cache_key(ocr_text: str) -> str:
