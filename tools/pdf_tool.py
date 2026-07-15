@@ -67,3 +67,42 @@ def pdf_to_images(
         document.close()
 
     return rendered_pages
+
+
+def extract_pdf_text(
+    pdf_path: str | Path,
+) -> str:
+    """
+    Extract selectable text directly from a PDF.
+
+    This does not perform OCR. It works only when the PDF
+    already contains a usable text layer.
+    """
+
+    source_path = Path(pdf_path)
+
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"PDF file not found: {source_path}"
+        )
+
+    if source_path.suffix.lower() != ".pdf":
+        raise ValueError(
+            f"Expected a PDF file: {source_path}"
+        )
+
+    document = fitz.open(source_path)
+
+    try:
+        page_texts: list[str] = []
+
+        for page in document:
+            page_text = page.get_text("text").strip()
+
+            if page_text:
+                page_texts.append(page_text)
+
+        return "\n\n".join(page_texts)
+
+    finally:
+        document.close()
