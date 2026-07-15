@@ -1,11 +1,6 @@
 from typing import Literal
 
-from pydantic import (
-    BaseModel,
-    ConfigDict,
-    Field,
-    model_validator,
-)
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from models.claim import Claim
 from models.claim_evidence import ClaimEvidence
@@ -14,7 +9,6 @@ from models.claim_processing_result import ClaimProcessingResult
 
 WorkflowStatus = Literal[
     "LOCAL_ERROR",
-    "DRY_RUN",
     "COMPLETED",
 ]
 
@@ -27,7 +21,6 @@ class EndToEndClaimResult(BaseModel):
 
     model_config = ConfigDict(
         extra="forbid",
-        arbitrary_types_allowed=True,
     )
 
     claim: Claim
@@ -48,6 +41,11 @@ class EndToEndClaimResult(BaseModel):
                     "READY evidence requires a processing result."
                 )
 
+            if self.workflow_status != "COMPLETED":
+                raise ValueError(
+                    "READY evidence requires workflow_status=COMPLETED."
+                )
+
         if self.evidence.status != "READY":
             if self.processing_result is not None:
                 raise ValueError(
@@ -60,15 +58,5 @@ class EndToEndClaimResult(BaseModel):
                     "Evidence preparation failure requires "
                     "workflow_status=LOCAL_ERROR."
                 )
-
-        if (
-            self.processing_result is not None
-            and self.processing_result.result_source == "dry_run"
-            and self.workflow_status != "DRY_RUN"
-        ):
-            raise ValueError(
-                "A dry-run processing result requires "
-                "workflow_status=DRY_RUN."
-            )
 
         return self

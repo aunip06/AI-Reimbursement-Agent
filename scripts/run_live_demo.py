@@ -69,11 +69,10 @@ def main() -> None:
 
     try:
         result = process_claim_from_files(
-            claim=claim,
-            pdf_directory=PDF_DIRECTORY,
-            dry_run=False,
-        )
-
+        claim=claim,
+        pdf_directory=PDF_DIRECTORY,
+)
+        
     except MaxTurnsExceeded:
         print(
             "\nLIVE TEST ERROR: The agent exceeded "

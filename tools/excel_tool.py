@@ -426,10 +426,7 @@ def read_claims_from_worksheet(
     errors: list[dict[str, Any]] = []
 
     seen_expense_ids: set[str] = set()
-    seen_page_references: set[
-        tuple[str, int]
-    ] = set()
-
+    
     for dataframe_index, row in dataframe.iterrows():
         source_row_number = dataframe_index + 2
 
@@ -516,24 +513,7 @@ def read_claims_from_worksheet(
             else:
                 seen_expense_ids.add(expense_id)
 
-        pdf_name = claim_data["monthly_pdf_name"]
-        page_number = claim_data["receipt_page_no"]
-
-        if pdf_name and page_number is not None:
-            page_reference = (
-                pdf_name.casefold(),
-                page_number,
-            )
-
-            if page_reference in seen_page_references:
-                row_errors.append(
-                    "Duplicate PDF page reference found."
-                )
-            else:
-                seen_page_references.add(
-                    page_reference
-                )
-
+        
         if row_errors:
             errors.append(
                 make_excel_error(
