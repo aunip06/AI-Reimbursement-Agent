@@ -27,6 +27,7 @@ def process_claim_ocr(
     pdf_exists: bool = True,
     page_exists: bool = True,
     duplicate_page_reference: bool = False,
+    dry_run: bool | None = None,
 ) -> ClaimProcessingResult:
     """
     Process one claim against OCR evidence from its mapped PDF page.
@@ -38,6 +39,12 @@ def process_claim_ocr(
     4. Otherwise run one OpenAI Agents SDK analysis.
     5. Apply the non-overridable approval safety gate.
     """
+
+    effective_dry_run = (
+        DRY_RUN
+        if dry_run is None
+        else dry_run
+    )
 
     cleaned_ocr_text = ocr_text.strip()
 
@@ -68,7 +75,7 @@ def process_claim_ocr(
             result_source = "cache"
 
     if analysis is None:
-        if DRY_RUN:
+        if effective_dry_run:
             return ClaimProcessingResult(
                 expense_id=claim.expense_id,
                 result_source="dry_run",
