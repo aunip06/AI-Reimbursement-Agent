@@ -1,32 +1,69 @@
+from pathlib import Path
+
 import fitz
-import os
+
+from config import TEMP_FOLDER
+from models.pdf_page import PDFPage
 
 
-def pdf_to_images(pdf_path, output_folder="temp"):
+def pdf_to_images(
+    pdf_path: str | Path,
+) -> list[PDFPage]:
     """
-    Convert PDF pages to PNG images using PyMuPDF.
+    Convert every PDF page into a PNG image.
+
+    Images are stored inside a PDF-specific temporary folder.
     """
 
-    os.makedirs(output_folder, exist_ok=True)
+    source_path = Path(pdf_path)
 
-    pdf = fitz.open(pdf_path)
-
-    image_paths = []
-
-    for page_number in range(len(pdf)):
-        page = pdf.load_page(page_number)
-
-        pix = page.get_pixmap(matrix=fitz.Matrix(3, 3))
-
-        image_path = os.path.join(
-            output_folder,
-            f"page_{page_number+1}.png"
+    if not source_path.exists():
+        raise FileNotFoundError(
+            f"PDF file not found: {source_path}"
         )
 
-        pix.save(image_path)
+    if source_path.suffix.lower() != ".pdf":
+        raise ValueError(
+            f"Expected a PDF file: {source_path}"
+        )
 
-        image_paths.append(image_path)
+    output_directory = Path(TEMP_FOLDER) / source_path.stem
 
-    pdf.close()
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
 
-    return image_paths
+    rendered_pages: list[PDFPage] = []
+
+    document = fitz.open(source_path)
+
+    try:
+        for page_index in range(len(document)):
+            page_number = page_index + 1
+            page = document[page_index]
+
+            image_path = (
+                output_directory
+                / f"page_{page_number:04d}.png"
+            )
+
+            pixmap = page.get_pixmap(
+                matrix=fitz.Matrix(3, 3),
+                alpha=False,
+            )
+
+            pixmap.save(str(image_path))
+
+            rendered_pages.append(
+                PDFPage(
+                    source_file=source_path.name,
+                    page_number=page_number,
+                    image_path=image_path,
+                )
+            )
+
+    finally:
+        document.close()
+
+    return rendered_pages

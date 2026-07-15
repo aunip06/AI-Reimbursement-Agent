@@ -14,22 +14,28 @@ from tools.pdf_tool import pdf_to_images
 
 pdf_file = "input/exp_may.pdf"
 
-print("Converting PDF to image...")
+print("Converting PDF to images...")
 
-images = pdf_to_images(pdf_file)
+# pdf_to_images() now returns a list of PDFPage objects.
+pages = pdf_to_images(pdf_file)
 
 # Limit the number of pages during development.
 if MAX_PAGES is not None:
-    images = images[:MAX_PAGES]
+    pages = pages[:MAX_PAGES]
 
-print(f"Processing {len(images)} page(s).")
+print(f"Processing {len(pages)} page(s).")
 
 
-for image in images:
-    print(f"\nReading: {image}")
+for page in pages:
+    print(
+        f"\nReading: {page.source_file}, "
+        f"page {page.page_number}"
+    )
 
-    # Extract text locally using OCR.
-    ocr_text = extract_text(image)
+    # Extract text locally from the rendered page image.
+    ocr_text = extract_text(
+        str(page.image_path)
+    )
 
     print("\n========== OCR TEXT ==========\n")
     print(ocr_text)
@@ -50,7 +56,6 @@ for image in images:
         )
         continue
 
-    # No cache exists and dry-run mode is disabled.
     print("\n========== AI EXTRACTION ==========\n")
 
     try:
