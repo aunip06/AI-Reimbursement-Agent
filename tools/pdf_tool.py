@@ -6,28 +6,46 @@ from config import TEMP_FOLDER
 from models.pdf_page import PDFPage
 
 
-def pdf_to_images(
-    pdf_path: str | Path,
-) -> list[PDFPage]:
-    """
-    Convert every PDF page into a PNG image.
+RENDER_SCALE = 3
 
-    Images are stored inside a PDF-specific temporary folder.
+
+def validate_pdf_path(
+    pdf_path: str | Path,
+) -> Path:
+    """
+    Validate and return a PDF path.
     """
 
     source_path = Path(pdf_path)
 
     if not source_path.exists():
         raise FileNotFoundError(
-            f"PDF file not found: {source_path}"
+            f"PDF file does not exist: {source_path}"
         )
 
-    if source_path.suffix.lower() != ".pdf":
+    if source_path.suffix.casefold() != ".pdf":
         raise ValueError(
             f"Expected a PDF file: {source_path}"
         )
 
-    output_directory = Path(TEMP_FOLDER) / source_path.stem
+    return source_path
+
+
+def pdf_to_images(
+    pdf_path: str | Path,
+) -> list[PDFPage]:
+    """
+    Render every page of a PDF into an image.
+
+    Retained for compatibility with the existing application.
+    """
+
+    source_path = validate_pdf_path(pdf_path)
+
+    output_directory = (
+        Path(TEMP_FOLDER)
+        / source_path.stem
+    )
 
     output_directory.mkdir(
         parents=True,
@@ -39,9 +57,14 @@ def pdf_to_images(
     document = fitz.open(source_path)
 
     try:
-        for page_index in range(len(document)):
+        for page_index in range(
+            len(document)
+        ):
             page_number = page_index + 1
-            page = document[page_index]
+
+            page = document.load_page(
+                page_index
+            )
 
             image_path = (
                 output_directory
@@ -49,11 +72,16 @@ def pdf_to_images(
             )
 
             pixmap = page.get_pixmap(
-                matrix=fitz.Matrix(3, 3),
+                matrix=fitz.Matrix(
+                    RENDER_SCALE,
+                    RENDER_SCALE,
+                ),
                 alpha=False,
             )
 
-            pixmap.save(str(image_path))
+            pixmap.save(
+                str(image_path)
+            )
 
             rendered_pages.append(
                 PDFPage(
@@ -69,27 +97,88 @@ def pdf_to_images(
     return rendered_pages
 
 
+def render_pdf_page(
+    pdf_path: str | Path,
+    page_number: int,
+) -> PDFPage:
+    """
+    Render only one required PDF page.
+
+    page_number uses one-based numbering because Excel
+    Receipt_Page_No is also one-based.
+    """
+
+    source_path = validate_pdf_path(
+        pdf_path
+    )
+
+    if page_number < 1:
+        raise ValueError(
+            "PDF page number must be at least 1."
+        )
+
+    output_directory = (
+        Path(TEMP_FOLDER)
+        / source_path.stem
+    )
+
+    output_directory.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    document = fitz.open(source_path)
+
+    try:
+        page_index = page_number - 1
+
+        if page_index >= len(document):
+            raise IndexError(
+                f"PDF page {page_number} does not exist. "
+                f"The PDF contains {len(document)} page(s)."
+            )
+
+        page = document.load_page(
+            page_index
+        )
+
+        image_path = (
+            output_directory
+            / f"page_{page_number:04d}.png"
+        )
+
+        pixmap = page.get_pixmap(
+            matrix=fitz.Matrix(
+                RENDER_SCALE,
+                RENDER_SCALE,
+            ),
+            alpha=False,
+        )
+
+        pixmap.save(
+            str(image_path)
+        )
+
+    finally:
+        document.close()
+
+    return PDFPage(
+        source_file=source_path.name,
+        page_number=page_number,
+        image_path=image_path,
+    )
+
+
 def extract_pdf_text(
     pdf_path: str | Path,
 ) -> str:
     """
-    Extract selectable text directly from a PDF.
-
-    This does not perform OCR. It works only when the PDF
-    already contains a usable text layer.
+    Extract selectable text from every PDF page.
     """
 
-    source_path = Path(pdf_path)
-
-    if not source_path.exists():
-        raise FileNotFoundError(
-            f"PDF file not found: {source_path}"
-        )
-
-    if source_path.suffix.lower() != ".pdf":
-        raise ValueError(
-            f"Expected a PDF file: {source_path}"
-        )
+    source_path = validate_pdf_path(
+        pdf_path
+    )
 
     document = fitz.open(source_path)
 
@@ -97,12 +186,58 @@ def extract_pdf_text(
         page_texts: list[str] = []
 
         for page in document:
-            page_text = page.get_text("text").strip()
+            page_text = page.get_text(
+                "text"
+            ).strip()
 
             if page_text:
-                page_texts.append(page_text)
+                page_texts.append(
+                    page_text
+                )
 
-        return "\n\n".join(page_texts)
+        return "\n\n".join(
+            page_texts
+        )
+
+    finally:
+        document.close()
+
+
+def extract_pdf_page_text(
+    pdf_path: str | Path,
+    page_number: int,
+) -> str:
+    """
+    Extract selectable text from one exact PDF page.
+    """
+
+    source_path = validate_pdf_path(
+        pdf_path
+    )
+
+    if page_number < 1:
+        raise ValueError(
+            "PDF page number must be at least 1."
+        )
+
+    document = fitz.open(source_path)
+
+    try:
+        page_index = page_number - 1
+
+        if page_index >= len(document):
+            raise IndexError(
+                f"PDF page {page_number} does not exist. "
+                f"The PDF contains {len(document)} page(s)."
+            )
+
+        page = document.load_page(
+            page_index
+        )
+
+        return page.get_text(
+            "text"
+        ).strip()
 
     finally:
         document.close()
