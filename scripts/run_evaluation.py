@@ -1,4 +1,4 @@
-"""
+r"""
 Automated evaluation runner for the AI Reimbursement Agent.
 
 This script:
@@ -22,6 +22,8 @@ python -m scripts.run_evaluation ^
 import argparse
 import time
 from pathlib import Path
+
+from copy import copy
 
 import pandas as pd
 
@@ -539,16 +541,24 @@ def generate_evaluation_report(
                 worksheet.dimensions
             )
 
-            for cell in worksheet[1]:
-                cell.font = cell.font.copy(
-                    bold=True,
-                    color="FFFFFF",
+        for cell in worksheet[1]:
+            header_font = copy(
+                cell.font
                 )
 
-                cell.fill = cell.fill.copy(
-                    fill_type="solid",
-                    fgColor="1F4E78",
+            header_font.bold = True
+            header_font.color = "FFFFFFFF"
+
+            cell.font = header_font
+
+            header_fill = copy(
+                cell.fill
                 )
+
+            header_fill.fill_type = "solid"
+            header_fill.fgColor.rgb = "FF1F4E78"
+
+            cell.fill = header_fill
 
             for column_cells in worksheet.columns:
                 maximum_length = max(

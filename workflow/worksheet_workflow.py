@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from collections import Counter
 from pathlib import Path
 
@@ -19,7 +21,11 @@ def get_page_reference(
     claim: Claim,
 ) -> PageReference:
     """
-    Return a normalized monthly PDF and page-number reference.
+    Return the normalized PDF-page reference.
+
+    Retained for backward compatibility with older tests.
+    Production duplicate protection now uses selected
+    receipt-candidate fingerprints.
     """
 
     return (
@@ -32,10 +38,11 @@ def find_duplicate_page_references(
     claims: list[Claim],
 ) -> set[PageReference]:
     """
-    Find every PDF/page combination referenced by more
-    than one reimbursement claim.
+    Return repeated PDF-page references.
 
-    All claims referencing a duplicated page must be blocked.
+    This helper is retained for compatibility only.
+    Repeated pages are no longer automatically rejected,
+    because one page may contain multiple separate receipts.
     """
 
     reference_counts = Counter(
@@ -45,7 +52,8 @@ def find_duplicate_page_references(
 
     return {
         reference
-        for reference, count in reference_counts.items()
+        for reference, count
+        in reference_counts.items()
         if count > 1
     }
 
@@ -54,14 +62,20 @@ def map_local_evidence_status(
     evidence_status: str,
 ) -> FinalStatus:
     """
-    Convert local PDF and OCR preparation statuses
-    into final reimbursement statuses.
+    Convert local evidence failures into final statuses.
     """
 
     status_map: dict[str, FinalStatus] = {
         "PDF_MISSING": "PDF_MISSING",
         "PAGE_MISSING": "PAGE_MISSING",
         "TEXT_NOT_FOUND": "OCR_UNCLEAR",
+        "EMPTY_PAGE": "EMPTY_PAGE",
+        "BILL_NOT_FOUND_ON_PAGE": (
+            "BILL_NOT_FOUND_ON_PAGE"
+        ),
+        "AMBIGUOUS_RECEIPT_SELECTION": (
+            "AMBIGUOUS_RECEIPT_SELECTION"
+        ),
     }
 
     return status_map.get(
@@ -70,86 +84,290 @@ def map_local_evidence_status(
     )
 
 
+def get_selected_receipt_fingerprint(
+    result: WorksheetClaimResult,
+) -> str | None:
+    """
+    Return the fingerprint of the exact receipt candidate
+    selected for one claim.
+    """
+
+    workflow_result = result.workflow_result
+
+    if workflow_result is None:
+        return None
+
+    return (
+        workflow_result
+        .evidence
+        .selected_candidate_fingerprint
+    )
+
+
+def find_duplicate_receipt_fingerprints(
+    results: list[WorksheetClaimResult],
+) -> set[str]:
+    """
+    Find selected receipt candidates used by multiple claims.
+
+    Claims referencing the same page but selecting different
+    candidates are not duplicates.
+    """
+
+    fingerprints = [
+        fingerprint
+        for result in results
+        if (
+            fingerprint
+            := get_selected_receipt_fingerprint(
+                result
+            )
+        )
+    ]
+
+    fingerprint_counts = Counter(
+        fingerprints
+    )
+
+    return {
+        fingerprint
+        for fingerprint, count
+        in fingerprint_counts.items()
+        if count > 1
+    }
+
+
+def mark_as_duplicate_receipt(
+    result: WorksheetClaimResult,
+) -> WorksheetClaimResult:
+    """
+    Replace a claim's decision with a non-payable duplicate
+    receipt decision while preserving its audit evidence.
+    """
+
+    duplicate_message = (
+        "The same independently detected receipt candidate "
+        "was selected for multiple reimbursement claims. "
+        "Every claim using this receipt was blocked."
+    )
+
+    workflow_result = (
+        result.workflow_result
+    )
+
+    if (
+        workflow_result is None
+        or workflow_result.processing_result
+        is None
+    ):
+        return result.model_copy(
+            deep=True,
+            update={
+                "final_status": (
+                    "DUPLICATE_RECEIPT_REFERENCE"
+                ),
+                "auto_payable": False,
+                "message": duplicate_message,
+            },
+        )
+
+    processing_result = (
+        workflow_result.processing_result
+    )
+
+    final_decision = (
+        processing_result.final_decision
+    )
+
+    updated_safety_checks = dict(
+        final_decision.safety_checks
+    )
+
+    updated_safety_checks[
+        "unique_receipt_reference"
+    ] = False
+
+    updated_reasons = [
+        duplicate_message,
+        *final_decision.reasons,
+    ]
+
+    updated_final_decision = (
+        final_decision.model_copy(
+            deep=True,
+            update={
+                "final_status": (
+                    "DUPLICATE_RECEIPT_REFERENCE"
+                ),
+                "auto_payable": False,
+                "safety_checks": (
+                    updated_safety_checks
+                ),
+                "reasons": (
+                    updated_reasons
+                ),
+            },
+        )
+    )
+
+    updated_processing_result = (
+        processing_result.model_copy(
+            deep=True,
+            update={
+                "final_decision": (
+                    updated_final_decision
+                ),
+                "message": (
+                    duplicate_message
+                ),
+            },
+        )
+    )
+
+    updated_workflow_result = (
+        workflow_result.model_copy(
+            deep=True,
+            update={
+                "processing_result": (
+                    updated_processing_result
+                ),
+                "message": (
+                    duplicate_message
+                ),
+            },
+        )
+    )
+
+    return result.model_copy(
+        deep=True,
+        update={
+            "final_status": (
+                "DUPLICATE_RECEIPT_REFERENCE"
+            ),
+            "auto_payable": False,
+            "message": duplicate_message,
+            "workflow_result": (
+                updated_workflow_result
+            ),
+        },
+    )
+
+
+def apply_duplicate_receipt_protection(
+    results: list[WorksheetClaimResult],
+) -> list[WorksheetClaimResult]:
+    """
+    Block every claim using a duplicated receipt candidate.
+    """
+
+    duplicate_fingerprints = (
+        find_duplicate_receipt_fingerprints(
+            results
+        )
+    )
+
+    protected_results: list[
+        WorksheetClaimResult
+    ] = []
+
+    for result in results:
+        fingerprint = (
+            get_selected_receipt_fingerprint(
+                result
+            )
+        )
+
+        if (
+            fingerprint
+            and fingerprint
+            in duplicate_fingerprints
+        ):
+            protected_results.append(
+                mark_as_duplicate_receipt(
+                    result
+                )
+            )
+
+        else:
+            protected_results.append(
+                result
+            )
+
+    return protected_results
+
+
 def process_monthly_worksheet(
     excel_path: str | Path,
     worksheet_name: str,
     pdf_directory: str | Path,
 ) -> WorksheetProcessingResult:
     """
-    Process every valid reimbursement claim in one worksheet.
+    Process every valid claim in one monthly worksheet.
 
-    There is no fixed claim limit and no PDF page limit.
+    Multiple claims may reference the same PDF page. Each claim
+    is matched to an isolated receipt candidate first.
 
-    Only the PDF pages referenced by valid claims are rendered,
-    OCR-processed, analyzed and verified.
-
-    Duplicate page references are blocked before OCR or SDK
-    processing, so no OpenAI credits are used for those claims.
+    Duplicate protection is applied only after candidate
+    selection and uses the selected receipt fingerprint.
     """
 
-    # Import locally so duplicate-only and Excel-only tests do not
-    # unnecessarily initialize EasyOCR, PyTorch, or PDF processing.
+    # Local import prevents EasyOCR and PyTorch from loading
+    # during Excel-only and helper-function tests.
     from workflow.end_to_end_workflow import (
         process_claim_from_files,
     )
 
-    claims, excel_errors = read_claims_from_worksheet(
-        file_path=excel_path,
-        worksheet_name=worksheet_name,
-    )
-
-    duplicate_references = (
-        find_duplicate_page_references(
-            claims
+    claims, excel_errors = (
+        read_claims_from_worksheet(
+            file_path=excel_path,
+            worksheet_name=worksheet_name,
         )
     )
 
-    results: list[WorksheetClaimResult] = []
+    results: list[
+        WorksheetClaimResult
+    ] = []
 
     for claim in claims:
-        page_reference = get_page_reference(
-            claim
+        workflow_result = (
+            process_claim_from_files(
+                claim=claim,
+                pdf_directory=pdf_directory,
+            )
         )
 
-        if page_reference in duplicate_references:
+        if (
+            workflow_result
+            .processing_result
+            is None
+        ):
+            final_status = (
+                map_local_evidence_status(
+                    workflow_result
+                    .evidence
+                    .status
+                )
+            )
+
             results.append(
                 WorksheetClaimResult(
                     claim=claim,
-                    result_source="local_validation",
+                    result_source=(
+                        "local_validation"
+                    ),
                     final_status=(
-                        "DUPLICATE_PAGE_REFERENCE"
+                        final_status
                     ),
                     auto_payable=False,
                     message=(
-                        "The same monthly PDF page is referenced "
-                        "by multiple claims. No OCR or OpenAI SDK "
-                        "analysis was performed."
+                        workflow_result.message
                     ),
-                    workflow_result=None,
+                    workflow_result=(
+                        workflow_result
+                    ),
                 )
             )
-            continue
 
-        workflow_result = process_claim_from_files(
-            claim=claim,
-            pdf_directory=pdf_directory,
-        )
-
-        if workflow_result.processing_result is None:
-            final_status = map_local_evidence_status(
-                workflow_result.evidence.status
-            )
-
-            results.append(
-                WorksheetClaimResult(
-                    claim=claim,
-                    result_source="local_validation",
-                    final_status=final_status,
-                    auto_payable=False,
-                    message=workflow_result.message,
-                    workflow_result=workflow_result,
-                )
-            )
             continue
 
         processing_result = (
@@ -164,20 +382,31 @@ def process_monthly_worksheet(
             WorksheetClaimResult(
                 claim=claim,
                 result_source=(
-                    processing_result.result_source
+                    processing_result
+                    .result_source
                 ),
                 final_status=(
-                    final_decision.final_status
+                    final_decision
+                    .final_status
                 ),
                 auto_payable=(
-                    final_decision.auto_payable
+                    final_decision
+                    .auto_payable
                 ),
                 message=(
                     final_decision.reasons[0]
                 ),
-                workflow_result=workflow_result,
+                workflow_result=(
+                    workflow_result
+                ),
             )
         )
+
+    results = (
+        apply_duplicate_receipt_protection(
+            results
+        )
+    )
 
     approved_count = sum(
         1
@@ -185,17 +414,18 @@ def process_monthly_worksheet(
         if result.auto_payable
     )
 
-    exception_count = sum(
-        1
-        for result in results
-        if not result.auto_payable
+    exception_count = (
+        len(results)
+        - approved_count
     )
 
-    duplicate_page_claims = sum(
+    duplicate_receipt_claims = sum(
         1
         for result in results
-        if result.final_status
-        == "DUPLICATE_PAGE_REFERENCE"
+        if (
+            result.final_status
+            == "DUPLICATE_RECEIPT_REFERENCE"
+        )
     )
 
     completed_claims = sum(
@@ -211,12 +441,22 @@ def process_monthly_worksheet(
     return WorksheetProcessingResult(
         worksheet_name=worksheet_name,
         total_claims=len(claims),
-        completed_claims=completed_claims,
-        approved_count=approved_count,
-        exception_count=exception_count,
-        duplicate_page_claims=(
-            duplicate_page_claims
+        completed_claims=(
+            completed_claims
         ),
+        approved_count=(
+            approved_count
+        ),
+        exception_count=(
+            exception_count
+        ),
+
+        # The model currently retains this legacy field name.
+        # It now stores duplicate receipt-claim count.
+        duplicate_page_claims=(
+            duplicate_receipt_claims
+        ),
+
         excel_errors=excel_errors,
         results=results,
     )
