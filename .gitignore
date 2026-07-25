@@ -32,3 +32,5 @@ input/*
 .DS_Store
 Thumbs.db
 cache/
+*.before_*
+*.pre_*_backup*
