@@ -34,3 +34,4 @@ Thumbs.db
 cache/
 *.before_*
 *.pre_*_backup*
+repository_audit_report.txt
