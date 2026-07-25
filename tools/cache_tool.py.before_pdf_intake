@@ -11,7 +11,7 @@ from config import MODEL
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 CACHE_DIRECTORY = PROJECT_ROOT / "cache"
 
-RECEIPT_CACHE_VERSION = "receipt-extraction-v3"
+RECEIPT_CACHE_VERSION = "receipt-extraction-v2"
 ANALYSIS_CACHE_VERSION = "reimbursement-analysis-v1"
 
 

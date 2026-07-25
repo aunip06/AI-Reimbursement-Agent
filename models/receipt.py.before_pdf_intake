@@ -88,15 +88,6 @@ class Receipt(BaseModel):
         description="Currency code such as INR, USD, or EUR."
     )
 
-
-    remark: str | None = Field(
-        default=None,
-        description=(
-            "Short purpose or description visible in the receipt, "
-            "such as taxi fare, hotel stay, printing, meal, or supplies."
-        ),
-    )
-
     confidence: Literal[
         "high",
         "medium",

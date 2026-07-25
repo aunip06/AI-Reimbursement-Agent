@@ -105,16 +105,6 @@ currency:
 - Do not assume INR merely because the receipt appears Indian.
 - Return null when the currency cannot be established.
 
-
-remark:
-- Extract a short purpose or description that is visibly supported by the
-  receipt, such as taxi fare, hotel stay, printing, meal, office supplies,
-  fuel, courier, or travel ticket.
-- Do not use generic payment states such as Paid or Successful as the remark
-  when a more useful bill purpose is visible.
-- Return null when the purpose is not visible. Do not infer it only from the
-  merchant name.
-
 confidence:
 Choose exactly one:
 - high: the important fields are clear and internally consistent.

@@ -15,21 +15,23 @@ from models.receipt_candidate import (
 )
 
 
-DETECTOR_VERSION = (
-    "hybrid-receipt-candidate-v1"
-)
+DETECTOR_VERSION = "hybrid-layout-receipt-v2.1"
 
-MIN_CANDIDATE_AREA_RATIO = 0.025
+MIN_CANDIDATE_AREA_RATIO = 0.018
 MAX_CANDIDATE_AREA_RATIO = 0.985
-
-MIN_WIDTH_RATIO = 0.10
-MIN_HEIGHT_RATIO = 0.08
+MIN_WIDTH_RATIO = 0.08
+MIN_HEIGHT_RATIO = 0.06
 
 BLANK_NON_WHITE_RATIO = 0.0025
 BLANK_EDGE_DENSITY = 0.0008
 BLANK_STANDARD_DEVIATION = 3.0
 
+NATIVE_CONFIDENCE = 0.995
+XY_CUT_CONFIDENCE = 0.90
+CONTOUR_CONFIDENCE = 0.70
+
 Box = tuple[int, int, int, int]
+Gutter = tuple[int, int]
 
 
 def read_image(
@@ -112,6 +114,24 @@ def box_area(
     )
 
 
+def box_width(
+    box: Box,
+) -> int:
+    return max(
+        0,
+        box[2] - box[0],
+    )
+
+
+def box_height(
+    box: Box,
+) -> int:
+    return max(
+        0,
+        box[3] - box[1],
+    )
+
+
 def clip_box(
     box: Box,
     image_width: int,
@@ -123,35 +143,49 @@ def clip_box(
 
     x_min, y_min, x_max, y_max = box
 
-    return (
-        max(
-            0,
-            min(
-                x_min,
+    clipped_x_min = max(
+        0,
+        min(
+            x_min,
+            max(
+                0,
                 image_width - 1,
             ),
         ),
-        max(
-            0,
-            min(
-                y_min,
+    )
+
+    clipped_y_min = max(
+        0,
+        min(
+            y_min,
+            max(
+                0,
                 image_height - 1,
             ),
         ),
-        max(
-            1,
-            min(
-                x_max,
-                image_width,
-            ),
+    )
+
+    clipped_x_max = max(
+        clipped_x_min + 1,
+        min(
+            x_max,
+            image_width,
         ),
-        max(
-            1,
-            min(
-                y_max,
-                image_height,
-            ),
+    )
+
+    clipped_y_max = max(
+        clipped_y_min + 1,
+        min(
+            y_max,
+            image_height,
         ),
+    )
+
+    return (
+        clipped_x_min,
+        clipped_y_min,
+        clipped_x_max,
+        clipped_y_max,
     )
 
 
@@ -159,17 +193,16 @@ def expand_box(
     box: Box,
     image_width: int,
     image_height: int,
-    padding_ratio: float = 0.012,
+    padding_ratio: float = 0.008,
 ) -> Box:
     """
-    Add padding around a candidate so shadows,
-    rounded corners and edge text are retained.
+    Add conservative padding without joining nearby receipts.
     """
 
     x_min, y_min, x_max, y_max = box
 
     padding_x = max(
-        4,
+        3,
         int(
             image_width
             * padding_ratio
@@ -177,7 +210,7 @@ def expand_box(
     )
 
     padding_y = max(
-        4,
+        3,
         int(
             image_height
             * padding_ratio
@@ -286,6 +319,93 @@ def containment_ratio(
     )
 
 
+def overlap_ratio(
+    first_box: Box,
+    second_box: Box,
+) -> float:
+    """
+    Return intersection relative to the smaller box.
+    """
+
+    smaller_area = min(
+        box_area(first_box),
+        box_area(second_box),
+    )
+
+    if smaller_area <= 0:
+        return 0.0
+
+    return (
+        intersection_area(
+            first_box,
+            second_box,
+        )
+        / smaller_area
+    )
+
+
+def vertical_overlap_ratio(
+    first_box: Box,
+    second_box: Box,
+) -> float:
+    """
+    Return overlap of vertical spans relative to the shorter span.
+    """
+
+    overlap = max(
+        0,
+        min(
+            first_box[3],
+            second_box[3],
+        )
+        - max(
+            first_box[1],
+            second_box[1],
+        ),
+    )
+
+    shorter_height = min(
+        box_height(first_box),
+        box_height(second_box),
+    )
+
+    if shorter_height <= 0:
+        return 0.0
+
+    return overlap / shorter_height
+
+
+def horizontal_overlap_ratio(
+    first_box: Box,
+    second_box: Box,
+) -> float:
+    """
+    Return overlap of horizontal spans relative to the shorter span.
+    """
+
+    overlap = max(
+        0,
+        min(
+            first_box[2],
+            second_box[2],
+        )
+        - max(
+            first_box[0],
+            second_box[0],
+        ),
+    )
+
+    shorter_width = min(
+        box_width(first_box),
+        box_width(second_box),
+    )
+
+    if shorter_width <= 0:
+        return 0.0
+
+    return overlap / shorter_width
+
+
 def calculate_page_statistics(
     image: np.ndarray,
 ) -> tuple[float, float, float]:
@@ -358,14 +478,10 @@ def proposal_is_large_enough(
     Reject tiny icons, logos and text fragments.
     """
 
-    x_min, y_min, x_max, y_max = box
-
-    width = x_max - x_min
-    height = y_max - y_min
-
-    page_area = (
+    page_area = max(
+        1,
         image_width
-        * image_height
+        * image_height,
     )
 
     area_ratio = (
@@ -374,13 +490,19 @@ def proposal_is_large_enough(
     )
 
     width_ratio = (
-        width
-        / image_width
+        box_width(box)
+        / max(
+            1,
+            image_width,
+        )
     )
 
     height_ratio = (
-        height
-        / image_height
+        box_height(box)
+        / max(
+            1,
+            image_height,
+        )
     )
 
     return (
@@ -394,6 +516,812 @@ def proposal_is_large_enough(
     )
 
 
+def build_content_mask(
+    image: np.ndarray,
+) -> np.ndarray:
+    """
+    Build a conservative page-content mask.
+
+    It retains screenshot boundaries and meaningful page content
+    without the large directional dilation that previously merged
+    neighbouring receipts.
+    """
+
+    gray_image = cv2.cvtColor(
+        image,
+        cv2.COLOR_BGR2GRAY,
+    )
+
+    blurred_image = cv2.GaussianBlur(
+        gray_image,
+        (3, 3),
+        0,
+    )
+
+    _, dark_content = cv2.threshold(
+        blurred_image,
+        248,
+        255,
+        cv2.THRESH_BINARY_INV,
+    )
+
+    edges = cv2.Canny(
+        blurred_image,
+        35,
+        125,
+    )
+
+    combined = cv2.bitwise_or(
+        dark_content,
+        edges,
+    )
+
+    open_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (2, 2),
+    )
+
+    cleaned = cv2.morphologyEx(
+        combined,
+        cv2.MORPH_OPEN,
+        open_kernel,
+        iterations=1,
+    )
+
+    close_kernel = cv2.getStructuringElement(
+        cv2.MORPH_RECT,
+        (5, 5),
+    )
+
+    return cv2.morphologyEx(
+        cleaned,
+        cv2.MORPH_CLOSE,
+        close_kernel,
+        iterations=1,
+    )
+
+
+def contiguous_runs(
+    values: np.ndarray,
+) -> list[Gutter]:
+    """
+    Convert a Boolean one-dimensional array into runs.
+    """
+
+    runs: list[Gutter] = []
+    run_start: int | None = None
+
+    for index, is_active in enumerate(
+        values.tolist()
+    ):
+        if is_active and run_start is None:
+            run_start = index
+
+        elif (
+            not is_active
+            and run_start is not None
+        ):
+            runs.append(
+                (
+                    run_start,
+                    index,
+                )
+            )
+
+            run_start = None
+
+    if run_start is not None:
+        runs.append(
+            (
+                run_start,
+                len(values),
+            )
+        )
+
+    return runs
+
+
+def find_axis_gutters(
+    mask: np.ndarray,
+    axis: int,
+    minimum_run: int,
+    maximum_density: float,
+) -> list[Gutter]:
+    """
+    Find long near-empty bands along one page axis.
+    """
+
+    density = np.mean(
+        mask > 0,
+        axis=axis,
+    )
+
+    low_density = (
+        density
+        <= maximum_density
+    )
+
+    return [
+        run
+        for run in contiguous_runs(
+            low_density
+        )
+        if (
+            run[1] - run[0]
+            >= minimum_run
+        )
+    ]
+
+
+def find_page_gutters(
+    content_mask: np.ndarray,
+) -> tuple[
+    list[Gutter],
+    list[Gutter],
+]:
+    """
+    Find strong vertical and horizontal whitespace gutters.
+    """
+
+    image_height, image_width = (
+        content_mask.shape[:2]
+    )
+
+    vertical_gutters = (
+        find_axis_gutters(
+            mask=content_mask,
+            axis=0,
+            minimum_run=max(
+                10,
+                int(
+                    image_width
+                    * 0.012
+                ),
+            ),
+            maximum_density=0.006,
+        )
+    )
+
+    horizontal_gutters = (
+        find_axis_gutters(
+            mask=content_mask,
+            axis=1,
+            minimum_run=max(
+                10,
+                int(
+                    image_height
+                    * 0.010
+                ),
+            ),
+            maximum_density=0.006,
+        )
+    )
+
+    return (
+        vertical_gutters,
+        horizontal_gutters,
+    )
+
+
+def content_bbox(
+    content_mask: np.ndarray,
+    region: Box,
+    image_width: int,
+    image_height: int,
+) -> Box | None:
+    """
+    Tighten a region around actual visible content.
+    """
+
+    x_min, y_min, x_max, y_max = (
+        clip_box(
+            region,
+            image_width,
+            image_height,
+        )
+    )
+
+    sub_mask = content_mask[
+        y_min:y_max,
+        x_min:x_max,
+    ]
+
+    points = cv2.findNonZero(
+        sub_mask
+    )
+
+    if points is None:
+        return None
+
+    x, y, width, height = (
+        cv2.boundingRect(
+            points
+        )
+    )
+
+    return expand_box(
+        (
+            x_min + x,
+            y_min + y,
+            x_min + x + width,
+            y_min + y + height,
+        ),
+        image_width=image_width,
+        image_height=image_height,
+        padding_ratio=0.006,
+    )
+
+
+def region_content_ratio(
+    content_mask: np.ndarray,
+    region: Box,
+) -> float:
+    """
+    Return visible-content density inside a region.
+    """
+
+    x_min, y_min, x_max, y_max = region
+
+    sub_mask = content_mask[
+        y_min:y_max,
+        x_min:x_max,
+    ]
+
+    if sub_mask.size == 0:
+        return 0.0
+
+    return float(
+        np.mean(
+            sub_mask > 0
+        )
+    )
+
+
+def find_best_split(
+    content_mask: np.ndarray,
+    region: Box,
+) -> tuple[
+    str,
+    Gutter,
+] | None:
+    """
+    Find the strongest valid whitespace split inside one region.
+
+    The split must leave meaningful content on both sides.
+    """
+
+    x_min, y_min, x_max, y_max = region
+
+    region_width = (
+        x_max - x_min
+    )
+
+    region_height = (
+        y_max - y_min
+    )
+
+    if (
+        region_width < 120
+        or region_height < 120
+    ):
+        return None
+
+    sub_mask = content_mask[
+        y_min:y_max,
+        x_min:x_max,
+    ]
+
+    vertical_runs = (
+        find_axis_gutters(
+            mask=sub_mask,
+            axis=0,
+            minimum_run=max(
+                10,
+                int(
+                    region_width
+                    * 0.020
+                ),
+            ),
+            maximum_density=0.004,
+        )
+    )
+
+    horizontal_runs = (
+        find_axis_gutters(
+            mask=sub_mask,
+            axis=1,
+            minimum_run=max(
+                10,
+                int(
+                    region_height
+                    * 0.018
+                ),
+            ),
+            maximum_density=0.004,
+        )
+    )
+
+    candidates: list[
+        tuple[
+            float,
+            str,
+            Gutter,
+        ]
+    ] = []
+
+    for start, end in vertical_runs:
+        if (
+            start
+            < region_width * 0.12
+            or end
+            > region_width * 0.88
+        ):
+            continue
+
+        left_region = (
+            x_min,
+            y_min,
+            x_min + start,
+            y_max,
+        )
+
+        right_region = (
+            x_min + end,
+            y_min,
+            x_max,
+            y_max,
+        )
+
+        left_ratio = (
+            region_content_ratio(
+                content_mask,
+                left_region,
+            )
+        )
+
+        right_ratio = (
+            region_content_ratio(
+                content_mask,
+                right_region,
+            )
+        )
+
+        if (
+            left_ratio < 0.008
+            or right_ratio < 0.008
+        ):
+            continue
+
+        balance = min(
+            box_area(left_region),
+            box_area(right_region),
+        ) / max(
+            1,
+            max(
+                box_area(left_region),
+                box_area(right_region),
+            ),
+        )
+
+        score = (
+            (end - start)
+            / region_width
+            + balance * 0.25
+        )
+
+        candidates.append(
+            (
+                score,
+                "vertical",
+                (
+                    x_min + start,
+                    x_min + end,
+                ),
+            )
+        )
+
+    for start, end in horizontal_runs:
+        if (
+            start
+            < region_height * 0.12
+            or end
+            > region_height * 0.88
+        ):
+            continue
+
+        top_region = (
+            x_min,
+            y_min,
+            x_max,
+            y_min + start,
+        )
+
+        bottom_region = (
+            x_min,
+            y_min + end,
+            x_max,
+            y_max,
+        )
+
+        top_ratio = (
+            region_content_ratio(
+                content_mask,
+                top_region,
+            )
+        )
+
+        bottom_ratio = (
+            region_content_ratio(
+                content_mask,
+                bottom_region,
+            )
+        )
+
+        if (
+            top_ratio < 0.008
+            or bottom_ratio < 0.008
+        ):
+            continue
+
+        balance = min(
+            box_area(top_region),
+            box_area(bottom_region),
+        ) / max(
+            1,
+            max(
+                box_area(top_region),
+                box_area(bottom_region),
+            ),
+        )
+
+        score = (
+            (end - start)
+            / region_height
+            + balance * 0.25
+        )
+
+        candidates.append(
+            (
+                score,
+                "horizontal",
+                (
+                    y_min + start,
+                    y_min + end,
+                ),
+            )
+        )
+
+    if not candidates:
+        return None
+
+    _, split_axis, split_band = max(
+        candidates,
+        key=lambda item: item[0],
+    )
+
+    return (
+        split_axis,
+        split_band,
+    )
+
+
+def recursive_xy_cut(
+    content_mask: np.ndarray,
+    region: Box,
+    image_width: int,
+    image_height: int,
+    depth: int = 0,
+    maximum_depth: int = 5,
+) -> list[Box]:
+    """
+    Recursively split the page along strong whitespace gutters.
+    """
+
+    tightened = content_bbox(
+        content_mask=content_mask,
+        region=region,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+    if tightened is None:
+        return []
+
+    if depth >= maximum_depth:
+        return [
+            tightened
+        ]
+
+    split = find_best_split(
+        content_mask=content_mask,
+        region=tightened,
+    )
+
+    if split is None:
+        return [
+            tightened
+        ]
+
+    split_axis, (
+        split_start,
+        split_end,
+    ) = split
+
+    x_min, y_min, x_max, y_max = (
+        tightened
+    )
+
+    if split_axis == "vertical":
+        first_region = (
+            x_min,
+            y_min,
+            split_start,
+            y_max,
+        )
+
+        second_region = (
+            split_end,
+            y_min,
+            x_max,
+            y_max,
+        )
+
+    else:
+        first_region = (
+            x_min,
+            y_min,
+            x_max,
+            split_start,
+        )
+
+        second_region = (
+            x_min,
+            split_end,
+            x_max,
+            y_max,
+        )
+
+    first_boxes = recursive_xy_cut(
+        content_mask=content_mask,
+        region=first_region,
+        image_width=image_width,
+        image_height=image_height,
+        depth=depth + 1,
+        maximum_depth=maximum_depth,
+    )
+
+    second_boxes = recursive_xy_cut(
+        content_mask=content_mask,
+        region=second_region,
+        image_width=image_width,
+        image_height=image_height,
+        depth=depth + 1,
+        maximum_depth=maximum_depth,
+    )
+
+    if (
+        not first_boxes
+        or not second_boxes
+    ):
+        return [
+            tightened
+        ]
+
+    return (
+        first_boxes
+        + second_boxes
+    )
+
+
+def detect_xy_cut_regions(
+    image: np.ndarray,
+    content_mask: np.ndarray,
+) -> list[dict[str, Any]]:
+    """
+    Detect page regions through global whitespace segmentation.
+    """
+
+    image_height, image_width = (
+        image.shape[:2]
+    )
+
+    initial_region = (
+        0,
+        0,
+        image_width,
+        image_height,
+    )
+
+    boxes = recursive_xy_cut(
+        content_mask=content_mask,
+        region=initial_region,
+        image_width=image_width,
+        image_height=image_height,
+    )
+
+    proposals: list[
+        dict[str, Any]
+    ] = []
+
+    for box in boxes:
+        if not proposal_is_large_enough(
+            box=box,
+            image_width=image_width,
+            image_height=image_height,
+        ):
+            continue
+
+        density = region_content_ratio(
+            content_mask,
+            box,
+        )
+
+        if density < 0.010:
+            continue
+
+        confidence = min(
+            0.94,
+            XY_CUT_CONFIDENCE
+            + min(
+                0.04,
+                density * 0.10,
+            ),
+        )
+
+        proposals.append(
+            {
+                "box": box,
+                "source": "visual_region",
+                "confidence": round(
+                    confidence,
+                    3,
+                ),
+                "notes": [
+                    (
+                        "Candidate detected through recursive "
+                        "whitespace and gutter segmentation."
+                    )
+                ],
+                "method": "xy_cut",
+            }
+        )
+
+    return proposals
+
+
+def detect_contour_regions(
+    image: np.ndarray,
+    content_mask: np.ndarray,
+) -> list[dict[str, Any]]:
+    """
+    Generate conservative contour proposals.
+
+    No large directional dilation is used, preventing nearby
+    receipts from being joined into a synthetic cross-page box.
+    """
+
+    image_height, image_width = (
+        image.shape[:2]
+    )
+
+    contour_mask = cv2.morphologyEx(
+        content_mask,
+        cv2.MORPH_CLOSE,
+        cv2.getStructuringElement(
+            cv2.MORPH_RECT,
+            (7, 7),
+        ),
+        iterations=1,
+    )
+
+    contours, _ = cv2.findContours(
+        contour_mask,
+        cv2.RETR_EXTERNAL,
+        cv2.CHAIN_APPROX_SIMPLE,
+    )
+
+    proposals: list[
+        dict[str, Any]
+    ] = []
+
+    page_area = max(
+        1,
+        image_width
+        * image_height,
+    )
+
+    for contour in contours:
+        x, y, width, height = (
+            cv2.boundingRect(
+                contour
+            )
+        )
+
+        box = expand_box(
+            (
+                x,
+                y,
+                x + width,
+                y + height,
+            ),
+            image_width=image_width,
+            image_height=image_height,
+            padding_ratio=0.006,
+        )
+
+        if not proposal_is_large_enough(
+            box=box,
+            image_width=image_width,
+            image_height=image_height,
+        ):
+            continue
+
+        density = region_content_ratio(
+            content_mask,
+            box,
+        )
+
+        if density < 0.014:
+            continue
+
+        contour_area = float(
+            cv2.contourArea(
+                contour
+            )
+        )
+
+        rectangularity = min(
+            1.0,
+            contour_area
+            / max(
+                1.0,
+                float(
+                    width
+                    * height
+                ),
+            ),
+        )
+
+        area_ratio = (
+            box_area(box)
+            / page_area
+        )
+
+        confidence = min(
+            0.84,
+            CONTOUR_CONFIDENCE
+            + rectangularity * 0.08
+            + min(
+                0.04,
+                density * 0.08,
+            )
+            + min(
+                0.02,
+                area_ratio * 0.02,
+            ),
+        )
+
+        proposals.append(
+            {
+                "box": box,
+                "source": "visual_region",
+                "confidence": round(
+                    confidence,
+                    3,
+                ),
+                "notes": [
+                    (
+                        "Candidate detected from a conservative "
+                        "connected visual region."
+                    )
+                ],
+                "method": "contour",
+            }
+        )
+
+    return proposals
+
+
 def detect_native_pdf_images(
     pdf_path: str | Path,
     page_number: int,
@@ -403,7 +1331,8 @@ def detect_native_pdf_images(
     """
     Detect independent images embedded in the PDF page.
 
-    PDF coordinates are converted into rendered-image pixels.
+    Embedded images are the strongest source of screenshot
+    boundaries and are treated as primary layout regions.
     """
 
     proposals: list[
@@ -448,10 +1377,8 @@ def detect_native_pdf_images(
             / page_height
         )
 
-        page_dictionary = (
-            page.get_text(
-                "dict"
-            )
+        page_dictionary = page.get_text(
+            "dict"
         )
 
         for block in page_dictionary.get(
@@ -471,361 +1398,68 @@ def detect_native_pdf_images(
             ):
                 continue
 
-            x_min = int(
-                round(
-                    pdf_box[0]
-                    * scale_x
-                )
-            )
-
-            y_min = int(
-                round(
-                    pdf_box[1]
-                    * scale_y
-                )
-            )
-
-            x_max = int(
-                round(
-                    pdf_box[2]
-                    * scale_x
-                )
-            )
-
-            y_max = int(
-                round(
-                    pdf_box[3]
-                    * scale_y
-                )
-            )
-
             box = expand_box(
                 (
-                    x_min,
-                    y_min,
-                    x_max,
-                    y_max,
+                    int(
+                        round(
+                            pdf_box[0]
+                            * scale_x
+                        )
+                    ),
+                    int(
+                        round(
+                            pdf_box[1]
+                            * scale_y
+                        )
+                    ),
+                    int(
+                        round(
+                            pdf_box[2]
+                            * scale_x
+                        )
+                    ),
+                    int(
+                        round(
+                            pdf_box[3]
+                            * scale_y
+                        )
+                    ),
                 ),
-                image_width=(
-                    image_width
-                ),
-                image_height=(
-                    image_height
-                ),
+                image_width=image_width,
+                image_height=image_height,
+                padding_ratio=0.004,
             )
 
             if not proposal_is_large_enough(
                 box=box,
-                image_width=(
-                    image_width
-                ),
-                image_height=(
-                    image_height
-                ),
+                image_width=image_width,
+                image_height=image_height,
             ):
                 continue
 
             proposals.append(
                 {
                     "box": box,
-                    "source": (
-                        "native_pdf_image"
-                    ),
-                    "confidence": 0.98,
+                    "source": "native_pdf_image",
+                    "confidence": NATIVE_CONFIDENCE,
                     "notes": [
                         (
-                            "Candidate detected from an "
+                            "Candidate detected from an exact "
                             "embedded PDF image block."
                         )
                     ],
+                    "method": "native",
                 }
             )
 
     return proposals
 
 
-def add_contour_proposals(
-    binary_image: np.ndarray,
-    gray_image: np.ndarray,
-    image_width: int,
-    image_height: int,
-    proposals: list[dict[str, Any]],
-    detection_note: str,
-) -> None:
-    """
-    Convert external contours into visual-region proposals.
-    """
-
-    contours, _ = cv2.findContours(
-        binary_image,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_SIMPLE,
-    )
-
-    page_area = (
-        image_width
-        * image_height
-    )
-
-    for contour in contours:
-        x, y, width, height = (
-            cv2.boundingRect(
-                contour
-            )
-        )
-
-        raw_box = (
-            x,
-            y,
-            x + width,
-            y + height,
-        )
-
-        box = expand_box(
-            raw_box,
-            image_width=image_width,
-            image_height=image_height,
-        )
-
-        if not proposal_is_large_enough(
-            box=box,
-            image_width=image_width,
-            image_height=image_height,
-        ):
-            continue
-
-        x_min, y_min, x_max, y_max = (
-            box
-        )
-
-        region = gray_image[
-            y_min:y_max,
-            x_min:x_max,
-        ]
-
-        if region.size == 0:
-            continue
-
-        content_density = float(
-            np.mean(
-                region < 245
-            )
-        )
-
-        if content_density < 0.012:
-            continue
-
-        contour_area = float(
-            cv2.contourArea(
-                contour
-            )
-        )
-
-        bounding_area = float(
-            max(
-                1,
-                width * height,
-            )
-        )
-
-        rectangularity = min(
-            1.0,
-            contour_area
-            / bounding_area,
-        )
-
-        area_ratio = (
-            box_area(box)
-            / page_area
-        )
-
-        confidence = min(
-            0.95,
-            (
-                0.52
-                + min(
-                    0.18,
-                    rectangularity
-                    * 0.18,
-                )
-                + min(
-                    0.15,
-                    content_density
-                    * 1.5,
-                )
-                + min(
-                    0.10,
-                    area_ratio,
-                )
-            ),
-        )
-
-        proposals.append(
-            {
-                "box": box,
-                "source": (
-                    "visual_region"
-                ),
-                "confidence": round(
-                    confidence,
-                    3,
-                ),
-                "notes": [
-                    detection_note
-                ],
-            }
-        )
-
-
-def detect_visual_regions(
-    image: np.ndarray,
-) -> list[dict[str, Any]]:
-    """
-    Generate candidate proposals from a flattened page.
-
-    Multiple detection maps are used so the detector can find:
-
-    - bordered screenshots
-    - borderless screenshots
-    - photographs
-    - large text-and-image clusters
-    - screenshots in random page positions
-    """
-
-    image_height, image_width = (
-        image.shape[:2]
-    )
-
-    gray_image = cv2.cvtColor(
-        image,
-        cv2.COLOR_BGR2GRAY,
-    )
-
-    blurred_image = cv2.GaussianBlur(
-        gray_image,
-        (5, 5),
-        0,
-    )
-
-    edges = cv2.Canny(
-        blurred_image,
-        40,
-        135,
-    )
-
-    _, dark_content = cv2.threshold(
-        blurred_image,
-        245,
-        255,
-        cv2.THRESH_BINARY_INV,
-    )
-
-    combined_map = cv2.bitwise_or(
-        edges,
-        dark_content,
-    )
-
-    minimum_dimension = min(
-        image_width,
-        image_height,
-    )
-
-    small_kernel_size = max(
-        5,
-        int(
-            minimum_dimension
-            * 0.006
-        ),
-    )
-
-    small_kernel = (
-        cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (
-                small_kernel_size,
-                small_kernel_size,
-            ),
-        )
-    )
-
-    closed_map = cv2.morphologyEx(
-        combined_map,
-        cv2.MORPH_CLOSE,
-        small_kernel,
-        iterations=2,
-    )
-
-    horizontal_kernel = max(
-        15,
-        int(
-            image_width
-            * 0.012
-        ),
-    )
-
-    vertical_kernel = max(
-        9,
-        int(
-            image_height
-            * 0.007
-        ),
-    )
-
-    grouping_kernel = (
-        cv2.getStructuringElement(
-            cv2.MORPH_RECT,
-            (
-                horizontal_kernel,
-                vertical_kernel,
-            ),
-        )
-    )
-
-    grouped_map = cv2.dilate(
-        combined_map,
-        grouping_kernel,
-        iterations=2,
-    )
-
-    proposals: list[
-        dict[str, Any]
-    ] = []
-
-    add_contour_proposals(
-        binary_image=closed_map,
-        gray_image=gray_image,
-        image_width=image_width,
-        image_height=image_height,
-        proposals=proposals,
-        detection_note=(
-            "Candidate detected from closed "
-            "visual edges and content."
-        ),
-    )
-
-    add_contour_proposals(
-        binary_image=grouped_map,
-        gray_image=gray_image,
-        image_width=image_width,
-        image_height=image_height,
-        proposals=proposals,
-        detection_note=(
-            "Candidate detected from grouped "
-            "page-content regions."
-        ),
-    )
-
-    return proposals
-
-
-def remove_duplicate_proposals(
+def remove_near_duplicates(
     proposals: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     """
-    Remove overlapping and nested detections.
-
-    Native PDF image detections receive first priority,
-    followed by the largest coherent visual regions.
+    Remove near-identical boxes while keeping the strongest source.
     """
 
     source_priority = {
@@ -841,10 +1475,10 @@ def remove_duplicate_proposals(
                 proposal["source"],
                 0,
             ),
+            proposal["confidence"],
             box_area(
                 proposal["box"]
             ),
-            proposal["confidence"],
         ),
         reverse=True,
     )
@@ -858,118 +1492,562 @@ def remove_duplicate_proposals(
             "box"
         ]
 
-        should_skip = False
-
-        for existing in selected:
-            existing_box = existing[
-                "box"
-            ]
-
-            overlap = (
+        duplicate = any(
+            (
                 intersection_over_union(
                     proposal_box,
-                    existing_box,
+                    existing["box"],
                 )
+                >= 0.72
             )
-
-            proposal_inside_existing = (
-                containment_ratio(
+            or (
+                overlap_ratio(
                     proposal_box,
-                    existing_box,
+                    existing["box"],
                 )
-            )
-
-            existing_inside_proposal = (
-                containment_ratio(
-                    existing_box,
-                    proposal_box,
-                )
-            )
-
-            if overlap >= 0.58:
-                should_skip = True
-                break
-
-            if (
-                proposal_inside_existing
-                >= 0.88
-            ):
-                should_skip = True
-                break
-
-            if (
-                existing[
-                    "source"
-                ]
-                == "native_pdf_image"
-                and proposal[
-                    "source"
-                ]
-                == "visual_region"
-                and existing_inside_proposal
-                >= 0.90
-                and box_area(
-                    proposal_box
-                )
-                <= (
+                >= 0.92
+                and abs(
                     box_area(
-                        existing_box
+                        proposal_box
                     )
-                    * 2.5
+                    - box_area(
+                        existing["box"]
+                    )
                 )
-            ):
-                should_skip = True
-                break
+                / max(
+                    1,
+                    max(
+                        box_area(
+                            proposal_box
+                        ),
+                        box_area(
+                            existing["box"]
+                        ),
+                    ),
+                )
+                <= 0.35
+            )
+            for existing in selected
+        )
 
-        if not should_skip:
+        if not duplicate:
             selected.append(
                 proposal
             )
 
-    # Remove one huge wrapper when it contains two or more
-    # meaningful smaller candidates.
-    final_proposals: list[
+    return selected
+
+
+def proposal_crosses_native_layout(
+    proposal: dict[str, Any],
+    native_proposals: list[
         dict[str, Any]
+    ],
+) -> bool:
+    """
+    Reject a visual proposal that combines or duplicates
+    established native screenshot regions.
+    """
+
+    proposal_box = proposal[
+        "box"
+    ]
+
+    proposal_area = max(
+        1,
+        box_area(
+            proposal_box
+        ),
+    )
+
+    meaningful_native_overlaps: list[
+        tuple[
+            dict[str, Any],
+            float,
+            float,
+        ]
     ] = []
 
-    for proposal in selected:
-        proposal_box = proposal[
+    for native in native_proposals:
+        native_box = native[
             "box"
         ]
 
-        contained_candidates = [
+        intersection = (
+            intersection_area(
+                proposal_box,
+                native_box,
+            )
+        )
+
+        if intersection <= 0:
+            continue
+
+        proposal_fraction = (
+            intersection
+            / proposal_area
+        )
+
+        native_fraction = (
+            intersection
+            / max(
+                1,
+                box_area(
+                    native_box
+                ),
+            )
+        )
+
+        if (
+            proposal_fraction >= 0.04
+            or native_fraction >= 0.10
+        ):
+            meaningful_native_overlaps.append(
+                (
+                    native,
+                    proposal_fraction,
+                    native_fraction,
+                )
+            )
+
+        if (
+            containment_ratio(
+                proposal_box,
+                native_box,
+            )
+            >= 0.42
+        ):
+            return True
+
+        if (
+            containment_ratio(
+                native_box,
+                proposal_box,
+            )
+            >= 0.70
+        ):
+            return True
+
+        if (
+            intersection_over_union(
+                proposal_box,
+                native_box,
+            )
+            >= 0.22
+        ):
+            return True
+
+    if len(
+        meaningful_native_overlaps
+    ) >= 2:
+        return True
+
+    total_native_coverage = sum(
+        intersection_area(
+            proposal_box,
+            native["box"],
+        )
+        for native in native_proposals
+    ) / proposal_area
+
+    return total_native_coverage >= 0.18
+
+
+def proposal_crosses_gutter_layout(
+    proposal: dict[str, Any],
+    all_proposals: list[
+        dict[str, Any]
+    ],
+    vertical_gutters: list[Gutter],
+    horizontal_gutters: list[Gutter],
+) -> bool:
+    """
+    Reject a wrapper that crosses a strong gutter while
+    meaningful child proposals exist on both sides.
+    """
+
+    proposal_box = proposal[
+        "box"
+    ]
+
+    proposal_area = max(
+        1,
+        box_area(
+            proposal_box
+        ),
+    )
+
+    for gutter_start, gutter_end in (
+        vertical_gutters
+    ):
+        if not (
+            proposal_box[0]
+            < gutter_start
+            and proposal_box[2]
+            > gutter_end
+        ):
+            continue
+
+        left_children = [
             other
-            for other in selected
+            for other in all_proposals
             if other is not proposal
+            and other["box"][2]
+            <= gutter_end
             and containment_ratio(
                 other["box"],
                 proposal_box,
             )
-            >= 0.92
+            >= 0.70
+            and vertical_overlap_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.50
             and box_area(
                 other["box"]
             )
-            >= (
-                box_area(
-                    proposal_box
-                )
-                * 0.04
+            >= proposal_area * 0.06
+        ]
+
+        right_children = [
+            other
+            for other in all_proposals
+            if other is not proposal
+            and other["box"][0]
+            >= gutter_start
+            and containment_ratio(
+                other["box"],
+                proposal_box,
             )
+            >= 0.70
+            and vertical_overlap_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.50
+            and box_area(
+                other["box"]
+            )
+            >= proposal_area * 0.06
         ]
 
         if (
-            len(
-                contained_candidates
-            )
-            >= 2
+            left_children
+            and right_children
+        ):
+            return True
+
+    for gutter_start, gutter_end in (
+        horizontal_gutters
+    ):
+        if not (
+            proposal_box[1]
+            < gutter_start
+            and proposal_box[3]
+            > gutter_end
         ):
             continue
 
-        final_proposals.append(
+        top_children = [
+            other
+            for other in all_proposals
+            if other is not proposal
+            and other["box"][3]
+            <= gutter_end
+            and containment_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.70
+            and horizontal_overlap_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.50
+            and box_area(
+                other["box"]
+            )
+            >= proposal_area * 0.06
+        ]
+
+        bottom_children = [
+            other
+            for other in all_proposals
+            if other is not proposal
+            and other["box"][1]
+            >= gutter_start
+            and containment_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.70
+            and horizontal_overlap_ratio(
+                other["box"],
+                proposal_box,
+            )
+            >= 0.50
+            and box_area(
+                other["box"]
+            )
+            >= proposal_area * 0.06
+        ]
+
+        if (
+            top_children
+            and bottom_children
+        ):
+            return True
+
+    return False
+
+
+def proposal_is_multi_child_wrapper(
+    proposal: dict[str, Any],
+    all_proposals: list[
+        dict[str, Any]
+    ],
+) -> bool:
+    """
+    Reject a large wrapper containing multiple stronger regions.
+    """
+
+    proposal_box = proposal[
+        "box"
+    ]
+
+    proposal_area = max(
+        1,
+        box_area(
+            proposal_box
+        ),
+    )
+
+    children = [
+        other
+        for other in all_proposals
+        if other is not proposal
+        and other["confidence"]
+        >= proposal["confidence"]
+        and containment_ratio(
+            other["box"],
+            proposal_box,
+        )
+        >= 0.72
+        and box_area(
+            other["box"]
+        )
+        >= proposal_area * 0.05
+    ]
+
+    if len(children) < 2:
+        return False
+
+    covered_area = sum(
+        min(
+            box_area(
+                child["box"]
+            ),
+            intersection_area(
+                child["box"],
+                proposal_box,
+            ),
+        )
+        for child in children
+    )
+
+    return (
+        covered_area
+        / proposal_area
+        >= 0.18
+    )
+
+
+def boxes_conflict(
+    first_box: Box,
+    second_box: Box,
+) -> bool:
+    """
+    Determine whether two final candidates conflict.
+    """
+
+    if (
+        intersection_over_union(
+            first_box,
+            second_box,
+        )
+        >= 0.18
+    ):
+        return True
+
+    if (
+        overlap_ratio(
+            first_box,
+            second_box,
+        )
+        >= 0.38
+    ):
+        return True
+
+    if (
+        containment_ratio(
+            first_box,
+            second_box,
+        )
+        >= 0.58
+    ):
+        return True
+
+    if (
+        containment_ratio(
+            second_box,
+            first_box,
+        )
+        >= 0.58
+    ):
+        return True
+
+    return False
+
+
+def select_global_layout(
+    native_proposals: list[
+        dict[str, Any]
+    ],
+    visual_proposals: list[
+        dict[str, Any]
+    ],
+    vertical_gutters: list[Gutter],
+    horizontal_gutters: list[Gutter],
+) -> list[dict[str, Any]]:
+    """
+    Select one globally consistent set of receipt candidates.
+
+    Native image blocks are authoritative. Visual proposals are
+    admitted only when they represent uncovered page regions and
+    do not mix, duplicate or cross the established layout.
+    """
+
+    native_proposals = (
+        remove_near_duplicates(
+            native_proposals
+        )
+    )
+
+    visual_proposals = (
+        remove_near_duplicates(
+            visual_proposals
+        )
+    )
+
+    all_proposals = (
+        native_proposals
+        + visual_proposals
+    )
+
+    filtered_visuals = [
+        proposal
+        for proposal in visual_proposals
+        if not proposal_crosses_native_layout(
+            proposal,
+            native_proposals,
+        )
+        and not proposal_crosses_gutter_layout(
+            proposal,
+            all_proposals,
+            vertical_gutters,
+            horizontal_gutters,
+        )
+        and not proposal_is_multi_child_wrapper(
+            proposal,
+            all_proposals,
+        )
+    ]
+
+    selected: list[
+        dict[str, Any]
+    ] = list(
+        native_proposals
+    )
+
+    method_priority = {
+        "xy_cut": 2,
+        "contour": 1,
+    }
+
+    ordered_visuals = sorted(
+        filtered_visuals,
+        key=lambda proposal: (
+            method_priority.get(
+                proposal.get(
+                    "method",
+                    "",
+                ),
+                0,
+            ),
+            proposal["confidence"],
+            box_area(
+                proposal["box"]
+            ),
+        ),
+        reverse=True,
+    )
+
+    for proposal in ordered_visuals:
+        if any(
+            boxes_conflict(
+                proposal["box"],
+                existing["box"],
+            )
+            for existing in selected
+        ):
+            continue
+
+        selected.append(
             proposal
         )
 
-    return final_proposals
+    if not native_proposals:
+        selected = [
+            proposal
+            for proposal in selected
+            if not proposal_is_multi_child_wrapper(
+                proposal,
+                selected,
+            )
+        ]
+
+    return remove_near_duplicates(
+        selected
+    )
+
+
+def cleanup_old_page_outputs(
+    output_directory: Path,
+    page_number: int,
+) -> None:
+    """
+    Remove stale candidate crops from an earlier detector run.
+    """
+
+    patterns = [
+        (
+            f"page_{page_number:04d}"
+            "_candidate_*.png"
+        ),
+        (
+            f"page_{page_number:04d}"
+            "_candidate_map.png"
+        ),
+    ]
+
+    for pattern in patterns:
+        for path in output_directory.glob(
+            pattern
+        ):
+            path.unlink(
+                missing_ok=True
+            )
 
 
 def crop_fingerprint(
@@ -1004,10 +2082,13 @@ def detect_receipt_candidates(
 ) -> PageCandidateDetection:
     """
     Detect independent screenshot or receipt candidates
-    on one rendered PDF page.
+    using a globally consistent page-layout model.
 
-    This function does not perform OCR and does not affect
-    reimbursement decisions.
+    Detection order:
+    1. Exact embedded PDF images.
+    2. Recursive whitespace and gutter segmentation.
+    3. Conservative visual contours.
+    4. Global conflict and wrapper rejection.
     """
 
     pdf_path = Path(
@@ -1025,6 +2106,11 @@ def detect_receipt_candidates(
     output_directory.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    cleanup_old_page_outputs(
+        output_directory,
+        page_number,
     )
 
     image = read_image(
@@ -1082,11 +2168,18 @@ def detect_receipt_candidates(
             ),
         )
 
-    proposals: list[
-        dict[str, Any]
-    ] = []
+    content_mask = build_content_mask(
+        image
+    )
 
-    proposals.extend(
+    (
+        vertical_gutters,
+        horizontal_gutters,
+    ) = find_page_gutters(
+        content_mask
+    )
+
+    native_proposals = (
         detect_native_pdf_images(
             pdf_path=pdf_path,
             page_number=page_number,
@@ -1095,41 +2188,37 @@ def detect_receipt_candidates(
         )
     )
 
-    proposals.extend(
-        detect_visual_regions(
-            image=image
+    visual_proposals = (
+        detect_xy_cut_regions(
+            image=image,
+            content_mask=content_mask,
+        )
+        + detect_contour_regions(
+            image=image,
+            content_mask=content_mask,
         )
     )
 
-    proposals = (
-        remove_duplicate_proposals(
-            proposals
-        )
+    proposals = select_global_layout(
+        native_proposals=(
+            native_proposals
+        ),
+        visual_proposals=(
+            visual_proposals
+        ),
+        vertical_gutters=(
+            vertical_gutters
+        ),
+        horizontal_gutters=(
+            horizontal_gutters
+        ),
     )
 
-    if not proposals:
-        proposals = [
-            {
-                "box": (
-                    0,
-                    0,
-                    image_width,
-                    image_height,
-                ),
-                "source": (
-                    "full_page_fallback"
-                ),
-                "confidence": 0.45,
-                "notes": [
-                    (
-                        "No independent region was detected. "
-                        "The full nonblank page was retained "
-                        "for later AI layout review."
-                    )
-                ],
-            }
-        ]
-
+    # Do not convert an uncertain multi-document page into one
+    # full-page candidate. Returning zero candidates is safer than
+    # mixing evidence from unrelated receipts. A later AI-layout
+    # fallback can be added above this point without changing the
+    # OCR or extraction contracts.
     proposals = sorted(
         proposals,
         key=lambda proposal: (
@@ -1146,9 +2235,10 @@ def detect_receipt_candidates(
         image.copy()
     )
 
-    page_area = (
+    page_area = max(
+        1,
         image_width
-        * image_height
+        * image_height,
     )
 
     for candidate_index, proposal in enumerate(
@@ -1226,6 +2316,20 @@ def detect_receipt_candidates(
             / page_area
         )
 
+        notes = list(
+            proposal.get(
+                "notes",
+                [],
+            )
+        )
+
+        notes.append(
+            (
+                "Global layout method: "
+                f"{proposal.get('method', 'unknown')}."
+            )
+        )
+
         candidates.append(
             ReceiptCandidate(
                 candidate_no=(
@@ -1255,7 +2359,7 @@ def detect_receipt_candidates(
                     area_ratio,
                     6,
                 ),
-                detection_confidence=(
+                detection_confidence=float(
                     proposal[
                         "confidence"
                     ]
@@ -1263,10 +2367,12 @@ def detect_receipt_candidates(
                 image_fingerprint=(
                     fingerprint
                 ),
-                notes=proposal[
-                    "notes"
-                ],
+                notes=notes,
             )
+        )
+
+        label = (
+            f"Candidate {candidate_index}"
         )
 
         cv2.rectangle(
@@ -1289,7 +2395,7 @@ def detect_receipt_candidates(
 
         cv2.putText(
             annotated_image,
-            f"Candidate {candidate_index}",
+            label,
             (
                 x_min + 8,
                 max(
@@ -1348,8 +2454,16 @@ def detect_receipt_candidates(
             DETECTOR_VERSION
         ),
         message=(
-            f"Detected {len(candidates)} "
-            "independent receipt candidate(s). "
-            "The result is currently running in shadow mode."
+            (
+                f"Detected {len(candidates)} independent "
+                "receipt candidate(s) using global layout "
+                "selection."
+            )
+            if candidates
+            else (
+                "No globally consistent receipt layout could "
+                "be established. No mixed full-page candidate "
+                "was created."
+            )
         ),
     )
