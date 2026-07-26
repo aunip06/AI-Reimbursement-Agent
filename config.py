@@ -16,7 +16,7 @@ load_dotenv()
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 MODEL = os.getenv(
     "OPENAI_MODEL",
-    "gpt-4.1-mini",
+    "gpt-5.5",
 )
 
 if not OPENAI_API_KEY:
